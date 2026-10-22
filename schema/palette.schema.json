@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/626Labs-LLC/sanduhr-widgets/schema/palette.schema.json",
+  "title": "Sanduhr palette pack: palettes.json (format v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "palettes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "palettes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "colors"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,23}$" },
+          "colors": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+          },
+          "mood": { "type": "string", "maxLength": 24 }
+        }
+      }
+    }
+  }
+}

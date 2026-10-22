@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/626Labs-LLC/sanduhr-widgets/schema/sprite.schema.json",
+  "title": "Sanduhr sprite pack: sprite.json (format v1)",
+  "description": "Restates docs/FORMAT.md section 5.5. Cross-file checks (sheet dimensions, frame indexes inside each sheet, stage ordering, animation references) live in tools/validate.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "frame_w", "frame_h", "scale", "fps", "animations", "moods", "triggers", "roam"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "frame_w": { "$ref": "#/$defs/frameSize" },
+    "frame_h": { "$ref": "#/$defs/frameSize" },
+    "scale": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "fps": { "type": "integer", "minimum": 1, "maximum": 24 },
+    "sheet": { "$ref": "#/$defs/png" },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "min_growth", "sheet", "frame_w", "frame_h"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "minLength": 2, "maxLength": 20 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 24 },
+          "min_growth": { "type": "number", "minimum": 0, "maximum": 1 },
+          "sheet": { "$ref": "#/$defs/png" },
+          "frame_w": { "$ref": "#/$defs/frameSize" },
+          "frame_h": { "$ref": "#/$defs/frameSize" }
+        }
+      }
+    },
+    "animations": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{1,23}$" },
+      "required": ["walk", "sit", "nap", "pop", "cheer", "worry", "focus", "sleep", "celebrate"],
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 64,
+        "items": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "moods": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content", "focused", "worried", "exhausted", "celebrate"],
+      "properties": {
+        "content": { "$ref": "#/$defs/animName" },
+        "focused": { "$ref": "#/$defs/animName" },
+        "worried": { "$ref": "#/$defs/animName" },
+        "exhausted": { "$ref": "#/$defs/animName" },
+        "celebrate": { "$ref": "#/$defs/animName" }
+      }
+    },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["needs_you", "job_passed", "near_limit", "idle"],
+      "properties": {
+        "needs_you": { "$ref": "#/$defs/animName" },
+        "job_passed": { "$ref": "#/$defs/animName" },
+        "near_limit": { "$ref": "#/$defs/animName" },
+        "idle": { "$ref": "#/$defs/animName" }
+      }
+    },
+    "roam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edges", "speed_px_s"],
+      "properties": {
+        "edges": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": { "enum": ["bottom", "left", "right"] }
+        },
+        "speed_px_s": { "type": "number", "minimum": 5, "maximum": 120 }
+      }
+    }
+  },
+  "oneOf": [
+    { "required": ["sheet"], "not": { "required": ["stages"] } },
+    { "required": ["stages"], "not": { "required": ["sheet"] } }
+  ],
+  "$defs": {
+    "frameSize": { "type": "integer", "minimum": 8, "maximum": 64 },
+    "animName": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,23}$" },
+    "png": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\\.png$"
+    }
+  }
+}
