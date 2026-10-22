@@ -1,0 +1,8 @@
+* text=auto eol=lf
+
+# Never touch binary content.
+*.png binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.exe binary
