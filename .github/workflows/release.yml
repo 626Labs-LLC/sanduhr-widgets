@@ -1,0 +1,59 @@
+name: release
+
+# Push a tag like v1.0.0 to publish. The workflow validates every pack, builds the zips and
+# catalog.json, signs the catalog with the SIGNING_KEY secret (a PEM Ed25519 private key), and
+# uploads zips + catalog.json + catalog.json.sig to the GitHub release for the tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tool tests
+        run: python tools/test_validate.py
+
+      - name: Validate every pack (strict)
+        run: python tools/validate.py --strict
+
+      - name: Build zips and catalog
+        run: python tools/build_catalog.py --tag "${GITHUB_REF_NAME}" --out dist
+
+      - name: Require the signing key
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+        run: |
+          if [ -z "${SIGNING_KEY}" ]; then
+            echo "::error title=SIGNING_KEY is not set::Add the Ed25519 private key (PEM) as the repository secret SIGNING_KEY. Generate it offline: see README, 'Generating the signing key'. Nothing was published."
+            exit 1
+          fi
+
+      - name: Sign catalog.json
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_KEY_NEXT: ${{ secrets.SIGNING_KEY_NEXT }}
+        run: bash tools/sign_catalog.sh dist/catalog.json
+
+      - name: Publish to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" \
+              --notes "Widget packs and the signed catalog for ${GITHUB_REF_NAME}. Install from Sanduhr 3.8+, Settings > Desk > Widgets."
+          fi
+          gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/catalog.json dist/catalog.json.sig --clobber
+          if [ -f dist/catalog.json.sig2 ]; then
+            gh release upload "${GITHUB_REF_NAME}" dist/catalog.json.sig2 --clobber
+          fi
