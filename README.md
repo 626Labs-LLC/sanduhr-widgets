@@ -21,7 +21,7 @@ hash, then validates the pack itself.
 | `palette` | Named gradients of 1 to 4 color stops | `palettes.json` |
 | `effects` | `glow`, `sweep`, `shimmer` and `pulse` presets | `effects.json` |
 | `font` | TTF or OTF fonts, OFL-1.1 or Apache-2.0 only | `*.ttf`, `*.otf` |
-| `sprite` | A Desk companion: stages, moods, animations | `sprite.json` + PNG sheets |
+| `sprite` | A Desk companion: stages, moods, animations | `sprite.json` + PNG sheets or `.json` pixel sheets |
 
 One kind per pack. The spec is [docs/FORMAT.md](docs/FORMAT.md); JSON shapes are in
 [schema/](schema/).

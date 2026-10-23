@@ -167,6 +167,10 @@ A Desk companion. Art plus a mapping; Sanduhr supplies the behaviour (section 6)
 
 `files`: `sprite.json` plus every sheet it references, and nothing else.
 
+`sprite.json` has two schema versions. **Version 1** sheets are PNG only. **Version 2** is version
+1 plus one more sheet type, the `.json` pixel sheet (below), so art can be written as data; every
+other rule is identical, and a version 1 file stays valid unchanged.
+
 ```json
 {
   "schema_version": 1,
@@ -187,11 +191,11 @@ A Desk companion. Art plus a mapping; Sanduhr supplies the behaviour (section 6)
 
 | Key | Rule |
 |---|---|
-| `schema_version` | `1`. |
+| `schema_version` | `1` or `2`. A `.json` pixel sheet anywhere in the file needs `2`. |
 | `frame_w`, `frame_h` | Integers 8 to 64. The base frame size. With `stages`, equals stage 0. |
 | `scale` | Integer 1 to 4. Display multiplier, nearest-neighbour. |
 | `fps` | Integer 1 to 24. |
-| `sheet` | Path of the single sprite sheet (conventionally `sprite.png`). Required when `stages` is absent, forbidden when it is present. Without `stages`, the single sheet is stage 0. |
+| `sheet` | Path of the single sprite sheet (conventionally `sprite.png`; under version 2 it may be a `.json` pixel sheet). Required when `stages` is absent, forbidden when it is present. Without `stages`, the single sheet is stage 0. |
 | `stages` | Optional, 1 to 6 entries, ordered. See below. |
 | `animations` | Map of animation name to a list of frame indexes (1 to 64 integers, 0 or more). Names `^[a-z][a-z0-9_]{1,23}$`, at most 32. |
 | `moods` | Required. Keys exactly `content`, `focused`, `worried`, `exhausted`, `celebrate`; values are animation names. |
@@ -206,12 +210,41 @@ A Desk companion. Art plus a mapping; Sanduhr supplies the behaviour (section 6)
 index `i` is the `i`-th cell counting left to right, then top to bottom. Every sheet must have
 cells for the highest frame index any animation uses.
 
+**Pixel sheets (schema_version 2).** A sheet whose path ends in `.json` is a pixel sheet: the
+frames written out as characters, which Sanduhr rasterizes at install. It is a UTF-8 JSON object
+with exactly these keys:
+
+```json
+{
+  "palette": ["#22d3ee", "#a855f7", "#ec4899"],
+  "frame_w": 8,
+  "frame_h": 8,
+  "frames": [
+    ["..0000..", ".011110.", "01122110", "01122110", "01111110", ".011110.", "..0..0..", ".00..00."]
+  ]
+}
+```
+
+| Key | Rule |
+|---|---|
+| `palette` | 1 to 16 `#rrggbb` colors. `#ffffff` (any case) is rejected: pure white burns on OLED panels. |
+| `frame_w`, `frame_h` | Integers 8 to 32 (pixel sheets are sized for a companion), equal to the cell size of the stage (or the top-level size, for a single `sheet`) that uses the sheet. |
+| `frames` | 1 to 256 frames. Each frame is exactly `frame_h` strings, top row first, and each string is exactly `frame_w` characters, left pixel first. |
+
+Each character is one pixel: `.` is transparent, and `0`-`9`, `a`-`f` (lowercase) are an index into
+`palette`, which must be less than the palette's length. Every pixel is fully opaque or fully
+transparent. Frame `i` is `frames[i]`, and the sheet must have a frame for the highest frame index
+any animation uses. A pixel sheet is at most 2 MB. It is an ordinary pack file: it is listed in
+`files`, counts toward the 64-file and 10 MB limits, and goes through the content and trademark
+scans like every other JSON file. `sprite.json` itself is never a sheet.
+
 **Stages.** Each entry is `{ id, name, min_growth, sheet, frame_w, frame_h }`:
 
 - `id`: kebab-case, 2 to 20 characters, unique. `name`: 1 to 24 characters.
 - `min_growth`: number in `[0, 1]`. The first stage is `0`; values are strictly increasing.
   A stage is shown when `growth >= min_growth` and the next stage's `min_growth` is not reached.
-- `sheet`: PNG path, listed in `files`, unique per stage.
+- `sheet`: PNG path (or, under version 2, a `.json` pixel sheet), listed in `files`, unique per
+  stage. Stages may mix the two types.
 - `frame_w`, `frame_h`: 8 to 64. Stages may differ in cell size (a later stage may be larger).
 
 `animations` is shared: **every stage must provide every required animation**, because every stage
@@ -232,9 +265,9 @@ to an animation that plays once, then the mood animation resumes.
 | trigger | `near_limit` | A usage threshold was crossed. |
 | trigger | `idle` | Nothing has happened for a while. |
 
-**Art constraints** (checked by review, not by the validator): original art, no pure white
-(`#ffffff`), transparency for everything that is not the character, readable at the smallest
-scale.
+**Art constraints** (checked by review, not by the validator, except where noted): original art,
+no pure white (`#ffffff`; the validator enforces this for pixel-sheet palettes), transparency for
+everything that is not the character, readable at the smallest scale.
 
 ### 5.6 `preview.png`
 
