@@ -31,6 +31,6 @@ Out of scope: the Sanduhr application itself. Report those through Sanduhr's own
 
 ## The signing key
 
-The Ed25519 private key lives offline with the maintainer and in the repository secret
+The ECDSA P-256 private key lives offline with the maintainer and in the repository secret
 `SIGNING_KEY`. If you believe it was exposed, say so through the channel above. The response is a
 key rotation as described in `docs/FORMAT.md`.

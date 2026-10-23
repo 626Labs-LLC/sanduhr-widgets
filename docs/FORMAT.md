@@ -295,13 +295,40 @@ given pack version is byte-identical on every build, on every platform.
 trailing newline. Every release re-publishes every pack, so each `url` resolves under the same tag
 as the catalog that lists it.
 
-**catalog.json.sig** is the base64 (standard alphabet, no line breaks) Ed25519 signature over the
-exact bytes of `catalog.json`. Verify with OpenSSL 3:
+**catalog.json.sig** is an **ECDSA P-256 (prime256v1, secp256r1) signature with SHA-256** over the
+exact bytes of `catalog.json`:
+
+- The signature is the 64-byte IEEE P1363 form: `r` then `s`, each a 32-byte big-endian unsigned
+  integer, zero-padded on the left. This is .NET's
+  `DSASignatureFormat.IeeeP1363FixedFieldConcatenation` and WebCrypto's ECDSA format.
+- The file is those 64 bytes in base64 (standard alphabet, with padding, no line breaks), followed
+  by one LF. Strip trailing whitespace before decoding; anything that does not decode to exactly
+  64 bytes is an invalid signature.
+- The public key is distributed and pinned as a DER **SubjectPublicKeyInfo** (91 bytes for P-256,
+  base64 `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...`). In .NET:
+  `ECDsa.Create().ImportSubjectPublicKeyInfo(spki, out _)` then
+  `VerifyData(catalogBytes, sig, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation)`.
+
+Why P-256 and not Ed25519: Sanduhr runs on .NET 10, whose `System.Security.Cryptography` has no
+Ed25519. P-256 with P1363 signatures is what 626 Labs' other signed manifests already use (RoRoRo's
+`RobloxCompatSignature`, the Mod Launcher's `ManifestSignature`), so the client verifies with the
+platform's own crypto and no third-party library. Nothing had been signed or released when the
+format moved, so no client ever trusted an Ed25519 key.
+
+OpenSSL writes and reads ECDSA signatures as DER (`SEQUENCE { INTEGER r, INTEGER s }`), not P1363.
+`tools/ecdsa_sig.py` (Python 3 standard library) converts between the two, strictly. Verify with
+OpenSSL 3:
 
 ```
-openssl base64 -d -A -in catalog.json.sig -out catalog.sig.bin
-openssl pkeyutl -verify -rawin -pubin -inkey sanduhr-widgets-pub.pem -in catalog.json -sigfile catalog.sig.bin
+openssl base64 -d -A -in catalog.json.sig -out catalog.sig.bin          # 64 bytes, r||s
+python3 tools/ecdsa_sig.py p1363-to-der catalog.sig.bin catalog.sig.der  # DER for OpenSSL
+openssl dgst -sha256 -verify sanduhr-widgets-pub.pem -signature catalog.sig.der catalog.json
 ```
+
+`sanduhr-widgets-pub.pem` is the same key as the pinned SPKI in PEM form
+(`openssl pkey -pubin -inform DER -in spki.der -out sanduhr-widgets-pub.pem`). ECDSA signatures
+are randomized, so signing the same catalog twice gives two different, equally valid signatures;
+compare by verifying, never by bytes.
 
 **Client rules.** Sanduhr, and any other client, must do these in order and stop at the first
 failure:
@@ -320,11 +347,11 @@ failure:
 
 ### Key rotation
 
-The signing key is Ed25519. Its public half is embedded in Sanduhr. To rotate from key A to key B
-without stranding anyone:
+The signing key is an ECDSA P-256 key. Its public half is embedded in Sanduhr as a
+SubjectPublicKeyInfo. To rotate from key A to key B without stranding anyone:
 
-1. Generate key B. Ship a Sanduhr release that embeds **both** public keys and accepts a valid
-   signature from either, on either signature file.
+1. Generate key B (the same commands as key A, below). Ship a Sanduhr release that embeds **both**
+   SPKIs and accepts a valid signature from either key, on either signature file.
 2. Once that release is out, set `SIGNING_KEY_NEXT` (key B) next to `SIGNING_KEY` (key A) in the
    repository secrets. The release workflow then publishes `catalog.json.sig` (key A, which old
    clients read) and `catalog.json.sig2` (key B). The catalog is signed by both for the overlap.
@@ -334,5 +361,14 @@ without stranding anyone:
 4. If a key is compromised, skip the overlap: ship a Sanduhr release that drops it and rotate
    immediately. Catalogs signed only with a dropped key stop verifying, which is the point.
 
-The private key never lives in the repository, in CI logs, or on a shared machine. See the README
-for generation.
+The private key never lives in the repository, in CI logs, or on a shared machine. Generate it
+offline with OpenSSL 3 (the README has the full maintainer steps):
+
+```
+openssl ecparam -name prime256v1 -genkey -noout -out sanduhr-widgets-signing.pem
+openssl ec -in sanduhr-widgets-signing.pem -pubout -outform DER | base64     # the SPKI to pin
+```
+
+`tools/sign_catalog.sh` refuses any key that is not a P-256 private key, signs SHA-256, converts
+the signature to P1363, verifies it against the key's public half, and only then writes the file.
+It prints the SPKI it signed with, so a release log shows which pinned key a catalog needs.
