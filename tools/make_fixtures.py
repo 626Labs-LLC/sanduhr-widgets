@@ -46,6 +46,20 @@ SPRITE = {
     "roam": {"edges": ["bottom"], "speed_px_s": 20},
 }
 
+# Sprite v2 pixel sheet: four 8x8 frames (SPRITE's animations use indexes 0 to 3).
+PIXEL_FRAME = ["..0000..", ".011110.", "01122110", "01122110", "01111110", ".011110.", "..0..0..", ".00..00."]
+PIXEL = {
+    "palette": ["#22d3ee", "#a855f7", "#ec4899"], "frame_w": 8, "frame_h": 8,
+    "frames": [PIXEL_FRAME, PIXEL_FRAME[1:] + PIXEL_FRAME[:1], PIXEL_FRAME[::-1], PIXEL_FRAME],
+}
+SPRITE_V2 = dict(SPRITE, schema_version=2, sheet="sheet.json")
+
+
+def pixel(**over):
+    s = json.loads(json.dumps(PIXEL))
+    s.update(over)
+    return s
+
 
 def manifest(pid, kind, files, **over):
     m = {"schema_version": 1, "id": pid, "name": "Fixture " + kind, "version": "1.0.0",
@@ -108,6 +122,19 @@ def good(root):
     ]
     jw(d / "sprite.json", s)
     bw(d / "sprites" / "one.png", sheet(32, 8))
+    bw(d / "sprites" / "two.png", sheet(32, 32))
+    d = make(root, "good-sprite-pixel", "sprite", ["sheet.json", "sprite.json"])
+    jw(d / "sprite.json", SPRITE_V2)
+    jw(d / "sheet.json", PIXEL)
+    d = make(root, "good-sprite-pixel-stages", "sprite",
+             ["sprite.json", "sprites/one.json", "sprites/two.png"])
+    s = {k: v for k, v in SPRITE_V2.items() if k != "sheet"}
+    s["stages"] = [
+        {"id": "one", "name": "One", "min_growth": 0, "sheet": "sprites/one.json", "frame_w": 8, "frame_h": 8},
+        {"id": "two", "name": "Two", "min_growth": 0.5, "sheet": "sprites/two.png", "frame_w": 16, "frame_h": 16},
+    ]
+    jw(d / "sprite.json", s)
+    jw(d / "sprites" / "one.json", PIXEL)
     bw(d / "sprites" / "two.png", sheet(32, 32))
 
 
@@ -204,6 +231,30 @@ def bad(root):
     d = make(root, "bad-palette-stops", "palette", ["palettes.json"])
     jw(d / "palettes.json", {"schema_version": 1, "palettes": [
         {"name": "five", "colors": ["#111111"] * 5}]})
+
+    # sprite v2 pixel sheets: each one mistake away from good-sprite-pixel
+    def pixel_pack(pid, sheet_obj, sprite=SPRITE_V2):
+        d = make(root, pid, "sprite", ["sheet.json", "sprite.json"])
+        jw(d / "sprite.json", sprite)
+        jw(d / "sheet.json", sheet_obj)
+
+    f = list(PIXEL_FRAME)
+    f[3] = "011g2110"
+    pixel_pack("bad-pixel-char", pixel(frames=[f] + PIXEL["frames"][1:]))
+    f = list(PIXEL_FRAME)
+    f[2] = "01132110"  # index 3, palette has 3 colors (0 to 2)
+    pixel_pack("bad-pixel-index", pixel(frames=[f] + PIXEL["frames"][1:]))
+    f = list(PIXEL_FRAME)
+    f[5] = ".01111."
+    pixel_pack("bad-pixel-row-length", pixel(frames=[f] + PIXEL["frames"][1:]))
+    pixel_pack("bad-pixel-rows", pixel(frames=[PIXEL_FRAME[:7]] + PIXEL["frames"][1:]))
+    pixel_pack("bad-pixel-frames", pixel(frames=PIXEL["frames"][:3]))
+    pixel_pack("bad-pixel-white", pixel(palette=["#22d3ee", "#FFFFFF", "#ec4899"]))
+    pixel_pack("bad-pixel-colors", pixel(palette=["#%02x2040" % (i * 8) for i in range(17)]))
+    big = ["." * 40] * 40
+    pixel_pack("bad-pixel-frame-size", pixel(frame_w=40, frame_h=40, frames=[big] * 4),
+               sprite=dict(SPRITE_V2, frame_w=40, frame_h=40))
+    pixel_pack("bad-sprite-v1-json-sheet", PIXEL, sprite=dict(SPRITE_V2, schema_version=1))
 
 
 def main():

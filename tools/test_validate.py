@@ -45,6 +45,15 @@ BAD = {
     "bad-license-text": "LICENSE text does not look like MIT",
     "bad-effects-range": "period_ms must be an integer from 400 to 10000",
     "bad-palette-stops": "colors must be 1 to 4",
+    "bad-pixel-char": "sheet.json: frames[0][3][3] is 'g'; a pixel is '.' (transparent) or 0-9, a-f",
+    "bad-pixel-index": "frames[0][2][3] is palette index '3' (3) but the palette has only 3 colors",
+    "bad-pixel-row-length": "frames[0][5] is 7 characters, expected 8 (frame_w)",
+    "bad-pixel-rows": "frames[0] has 7 rows, expected 8 (frame_h)",
+    "bad-pixel-frames": "animations use frame index 3 but the pixel sheet has only 3 frames",
+    "bad-pixel-white": "palette[1] is pure white (#FFFFFF)",
+    "bad-pixel-colors": "palette must be 1 to 16 #rrggbb colors (got 17)",
+    "bad-pixel-frame-size": "frame_w and frame_h must be integers from 8 to 32, got 40 x 40",
+    "bad-sprite-v1-json-sheet": "'sheet.json' is a .json pixel sheet, which needs sprite.json schema_version 2",
 }
 
 BUILT_INS = {
@@ -332,6 +341,95 @@ class Mutations(TempCase):
         shutil.copytree(FIXTURES / "good" / "good-palette", b / "good-palette")
         reports = validate.validate_paths([str(a), str(b)])
         self.assertTrue(any("already used" in e for r in reports for e in r.errors))
+
+
+class PixelSheets(TempCase):
+    """Sprite schema v2: .json pixel sheets (FORMAT 5.5)."""
+
+    def errors(self, pack):
+        return validate.validate_pack(pack).errors
+
+    def test_bad_pixel_fixtures_fail_with_exactly_one_error(self):
+        for name in BAD:
+            if name.startswith("bad-pixel-") or name == "bad-sprite-v1-json-sheet":
+                with self.subTest(pack=name):
+                    self.assertEqual(len(self.errors(FIXTURES / "bad" / name)), 1)
+
+    def test_v1_sprites_stay_valid_unchanged(self):
+        for name in ("good-sprite", "good-sprite-stages"):
+            s = json.loads((FIXTURES / "good" / name / "sprite.json").read_text(encoding="utf-8"))
+            self.assertEqual(s["schema_version"], 1)
+            self.assertEqual(self.errors(FIXTURES / "good" / name), [])
+
+    def test_v2_with_png_sheets_only_is_valid(self):
+        d = self.copy_good("good-sprite")
+        self.edit_json(d / "sprite.json", lambda s: s.update(schema_version=2))
+        self.assertEqual(self.errors(d), [])
+
+    def test_schema_version_three_is_rejected(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sprite.json", lambda s: s.update(schema_version=3))
+        self.assertTrue(any("schema_version must be 1 or 2" in e for e in self.errors(d)))
+
+    def test_pixel_frame_must_match_the_stage(self):
+        d = self.copy_good("good-sprite-pixel-stages")
+        self.edit_json(d / "sprites" / "one.json", lambda p: p.update(
+            frame_w=16, frame_h=16, frames=[["0" * 16] * 16] * 4))
+        errs = self.errors(d)
+        self.assertTrue(any("frame size 16x16 does not match the stage 'one' frame size 8x8" in e
+                            for e in errs), errs)
+
+    def test_uppercase_index_is_rejected(self):
+        d = self.copy_good("good-sprite-pixel")
+
+        def upper(p):
+            p["frames"][1][0] = "..0A00.."
+        self.edit_json(d / "sheet.json", upper)
+        self.assertTrue(any("frames[1][0][3] is 'A'" in e for e in self.errors(d)))
+
+    def test_pixel_sheet_must_be_listed_and_counts_as_a_file(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "pack.json", lambda m: m["files"].remove("sheet.json"))
+        errs = self.errors(d)
+        self.assertTrue(any("must list sheet.json" in e for e in errs), errs)
+
+    def test_pixel_sheet_unknown_key_and_trademark_scan(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sheet.json", lambda p: p.update(title="Claude pet"))
+        errs = self.errors(d)
+        self.assertTrue(any("unknown keys ['title']" in e for e in errs), errs)
+        self.assertTrue(any("trademark: sheet.json value" in e for e in errs), errs)
+
+    def test_missing_keys_and_wrong_types(self):
+        d = self.copy_good("good-sprite-pixel")
+        (d / "sheet.json").write_text('{"palette": "#22d3ee", "frames": [["........"], 7]}',
+                                      encoding="utf-8")
+        errs = self.errors(d)
+        for needle in ("missing required key 'frame_w'", "palette must be 1 to 16",
+                       "frames[1] must be an array of strings"):
+            self.assertTrue(any(needle in e for e in errs), (needle, errs))
+
+    def test_sheet_must_be_png_or_json(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sprite.json", lambda s: s.update(sheet="sheet.txt"))
+        self.assertTrue(any("must be a .png sheet or a .json pixel sheet" in e for e in self.errors(d)))
+
+    def test_sprite_json_cannot_be_its_own_sheet(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sprite.json", lambda s: s.update(sheet="sprite.json"))
+        self.assertTrue(any("must not be sprite.json itself" in e for e in self.errors(d)))
+
+    def test_a_broken_sheet_does_not_flood_the_report(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sheet.json", lambda p: p.update(frames=[["zzzzzzzz"] * 8] * 40))
+        errs = self.errors(d)
+        self.assertLessEqual(len(errs), validate.PIXEL_MAX_ERRORS + 1)
+        self.assertIn("more errors in this pixel sheet are not shown", errs[-1])
+
+    def test_frame_limit(self):
+        d = self.copy_good("good-sprite-pixel")
+        self.edit_json(d / "sheet.json", lambda p: p.update(frames=p["frames"] * 65))
+        self.assertTrue(any("frames must be an array of 1 to 256" in e for e in self.errors(d)))
 
 
 class ThemeLintCalibration(unittest.TestCase):
