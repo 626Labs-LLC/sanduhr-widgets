@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Sanduhr widget packs against docs/FORMAT.md (format v1).
+"""Validate Sanduhr widget packs against docs/FORMAT.md (format v1, sprite.json v1 and v2).
 
 Python 3, standard library only. Schemas are checked by hand-written logic so CI needs no pip.
 
@@ -79,6 +79,14 @@ REQUIRED_ANIMATIONS = ("walk", "sit", "nap", "pop", "cheer", "worry", "focus", "
 MOOD_KEYS = ("content", "focused", "worried", "exhausted", "celebrate")
 TRIGGER_KEYS = ("needs_you", "job_passed", "near_limit", "idle")
 ROAM_EDGES = ("bottom", "left", "right")
+SPRITE_SCHEMAS = (1, 2)            # sprite.json schema_version; 2 adds .json pixel sheets
+PIXEL_KEYS = ("palette", "frame_w", "frame_h", "frames")
+PIXEL_CHARS = ".0123456789abcdef"  # "." is transparent, the rest index the palette
+PIXEL_MAX_COLORS = 16
+PIXEL_FRAME_MIN, PIXEL_FRAME_MAX = 8, 32
+PIXEL_MAX_FRAMES = 256
+PIXEL_MAX_BYTES = 2 * 1024 * 1024  # same ceiling as a PNG sheet
+PIXEL_MAX_ERRORS = 12              # per sheet, so one bad sheet does not flood the report
 EFFECT_TYPES = ("glow", "sweep", "shimmer", "pulse")
 
 
@@ -541,7 +549,87 @@ def check_effects(rep, data):
             rep.err('%s: color must be a #rrggbb color or "ink"' % where)
 
 
-def check_sprite(rep, pack_dir, data, files_field):
+def check_pixel_sheet(rep, rel, data, w, h, max_index, label):
+    """Check a sprite v2 pixel sheet (FORMAT 5.5) drawn into a w x h cell. Records errors only."""
+    errors = []
+
+    def err(msg):
+        errors.append("%s: %s" % (rel, msg))
+
+    if not isinstance(data, dict):
+        rep.err("%s: a pixel sheet must be a JSON object with %s" % (rel, ", ".join(PIXEL_KEYS)))
+        return
+    extra = set(data) - set(PIXEL_KEYS)
+    if extra:
+        err("unknown keys %s (a pixel sheet has exactly %s)" % (sorted(extra), ", ".join(PIXEL_KEYS)))
+    for k in PIXEL_KEYS:
+        if k not in data:
+            err("missing required key %r" % k)
+
+    pal = data.get("palette")
+    ncolors = None
+    if "palette" in data:
+        if not isinstance(pal, list) or not 1 <= len(pal) <= PIXEL_MAX_COLORS:
+            got = " (got %d)" % len(pal) if isinstance(pal, list) else ""
+            err("palette must be 1 to %d #rrggbb colors%s" % (PIXEL_MAX_COLORS, got))
+        else:
+            ncolors = len(pal)
+            for i, c in enumerate(pal):
+                if not isinstance(c, str) or not HEX_RE.match(c):
+                    err("palette[%d] %r is not a #rrggbb color" % (i, c))
+                elif c.lower() == "#ffffff":
+                    err("palette[%d] is pure white (%s), which sprites may not use (it burns on "
+                        "OLED panels); use an off-white such as #f0f0f0" % (i, c))
+
+    fw, fh = data.get("frame_w"), data.get("frame_h")
+    size_ok = all(is_int(v) and PIXEL_FRAME_MIN <= v <= PIXEL_FRAME_MAX for v in (fw, fh))
+    if "frame_w" in data and "frame_h" in data:
+        if not size_ok:
+            err("frame_w and frame_h must be integers from %d to %d, got %r x %r (pixel sheets are "
+                "sized for a companion)" % (PIXEL_FRAME_MIN, PIXEL_FRAME_MAX, fw, fh))
+        elif (fw, fh) != (w, h):
+            err("frame size %dx%d does not match the %s frame size %dx%d" % (fw, fh, label, w, h))
+    if not size_ok:
+        fw = fh = None
+
+    frames = data.get("frames")
+    if "frames" in data:
+        if not isinstance(frames, list) or not 1 <= len(frames) <= PIXEL_MAX_FRAMES:
+            err("frames must be an array of 1 to %d frames" % PIXEL_MAX_FRAMES)
+        else:
+            if max_index >= len(frames):
+                err("animations use frame index %d but the pixel sheet has only %d frame%s (%s)"
+                    % (max_index, len(frames), "" if len(frames) == 1 else "s", label))
+            for fi, frame in enumerate(frames):
+                if not isinstance(frame, list) or not all(isinstance(r, str) for r in frame):
+                    err("frames[%d] must be an array of strings, one per pixel row" % fi)
+                    continue
+                if fh is not None and len(frame) != fh:
+                    err("frames[%d] has %d rows, expected %d (frame_h)" % (fi, len(frame), fh))
+                for ri, row in enumerate(frame):
+                    if fw is not None and len(row) != fw:
+                        err("frames[%d][%d] is %d characters, expected %d (frame_w)"
+                            % (fi, ri, len(row), fw))
+                    for ci, ch in enumerate(row):
+                        if ch not in PIXEL_CHARS:
+                            err("frames[%d][%d][%d] is %r; a pixel is '.' (transparent) or 0-9, a-f "
+                                "(a palette index, lowercase)" % (fi, ri, ci, ch))
+                            break
+                        if ch != "." and ncolors is not None and int(ch, 16) >= ncolors:
+                            err("frames[%d][%d][%d] is palette index %r (%d) but the palette has "
+                                "only %d color%s" % (fi, ri, ci, ch, int(ch, 16), ncolors,
+                                                    "" if ncolors == 1 else "s"))
+                            break
+                if len(errors) > PIXEL_MAX_ERRORS:
+                    break
+
+    for m in errors[:PIXEL_MAX_ERRORS]:
+        rep.err(m)
+    if len(errors) > PIXEL_MAX_ERRORS:
+        rep.err("%s: more errors in this pixel sheet are not shown; fix the ones above first" % rel)
+
+
+def check_sprite(rep, pack_dir, data, files_field, jload=None):
     rel = "sprite.json"
     if not isinstance(data, dict):
         rep.err("%s: must be a JSON object" % rel)
@@ -551,8 +639,25 @@ def check_sprite(rep, pack_dir, data, files_field):
     extra = set(data) - allowed
     if extra:
         rep.err("%s: unknown keys %s" % (rel, sorted(extra)))
-    if data.get("schema_version") != 1 or isinstance(data.get("schema_version"), bool):
-        rep.err("%s: schema_version must be 1" % rel)
+    sv = data.get("schema_version")
+    if not is_int(sv) or sv not in SPRITE_SCHEMAS:
+        rep.err("%s: schema_version must be 1 or 2 (2 allows .json pixel sheets)" % rel)
+        sv = None
+
+    def sheet_path_error(path):
+        """None for an acceptable sheet path, else the reason it is not."""
+        if not isinstance(path, str) or not safe_rel_path(path):
+            return "must be a safe relative path"
+        if path.endswith(".png"):
+            return None
+        if path.endswith(".json"):
+            if path == "sprite.json":
+                return "must not be sprite.json itself"
+            if sv == 2:
+                return None
+            return ("%r is a .json pixel sheet, which needs sprite.json schema_version 2 "
+                    "(schema_version 1 sheets are .png only)" % path)
+        return "must be a .png sheet%s" % (" or a .json pixel sheet" if sv == 2 else "")
 
     def size_ok(v):
         return is_int(v) and 8 <= v <= 64
@@ -626,8 +731,9 @@ def check_sprite(rep, pack_dir, data, files_field):
         rep.err("%s: give exactly one of `sheet` (single sheet) or `stages`" % rel)
     elif has_sheet:
         s = data["sheet"]
-        if not isinstance(s, str) or not safe_rel_path(s) or not s.endswith(".png"):
-            rep.err("%s: sheet must be a safe relative .png path" % rel)
+        why = sheet_path_error(s)
+        if why:
+            rep.err("%s: sheet %s" % (rel, why))
         elif fw:
             sheets.append((s, fw, fh, "sheet"))
     else:
@@ -672,8 +778,9 @@ def check_sprite(rep, pack_dir, data, files_field):
                 rep.err("%s: stage 0 frame size %dx%d must equal the top-level frame_w x frame_h %dx%d"
                         % (where, sw, sh, fw, fh))
             sp = st.get("sheet")
-            if not isinstance(sp, str) or not safe_rel_path(sp) or not sp.endswith(".png"):
-                rep.err("%s: sheet must be a safe relative .png path" % where)
+            why = sheet_path_error(sp)
+            if why:
+                rep.err("%s: sheet %s" % (where, why))
             elif sp in used:
                 rep.err("%s: sheet %r is used by another stage" % (where, sp))
             else:
@@ -697,6 +804,18 @@ def check_sprite(rep, pack_dir, data, files_field):
         f = pack_dir / path
         if not f.is_file():
             continue  # reported by the exact-listing check
+        if path.endswith(".json"):
+            try:
+                size = f.stat().st_size
+            except OSError:
+                continue
+            if size > PIXEL_MAX_BYTES:
+                rep.err("%s: pixel sheet is %.1f MB, limit is 2 MB" % (path, size / 1048576))
+                continue
+            sheet = jload(path) if jload else load_json(f, rep, path)
+            if sheet is not None:
+                check_pixel_sheet(rep, path, sheet, w, h, max_index, label)
+            continue
         try:
             data_png = f.read_bytes()
         except OSError:
@@ -984,7 +1103,7 @@ def validate_pack(pack_dir, label=None):
             if "sprite.json" not in on_disk:
                 rep.err("sprite.json is missing")
         else:
-            check_sprite(rep, pack_dir, data, files_field)
+            check_sprite(rep, pack_dir, data, files_field, jload)
     return rep
 
 

@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/626Labs-LLC/sanduhr-widgets/schema/sprite.schema.json",
-  "title": "Sanduhr sprite pack: sprite.json (format v1)",
-  "description": "Restates docs/FORMAT.md section 5.5. Cross-file checks (sheet dimensions, frame indexes inside each sheet, stage ordering, animation references) live in tools/validate.py.",
+  "title": "Sanduhr sprite pack: sprite.json (schema_version 1 and 2)",
+  "description": "Restates docs/FORMAT.md section 5.5. schema_version 1 sheets are PNG only; schema_version 2 also allows a .json pixel sheet (its shape is $defs/pixelSheet, anchor #pixelSheet). Cross-file checks (sheet dimensions, frame indexes inside each sheet, a pixel sheet's rows, characters and palette indexes, stage ordering, animation references) live in tools/validate.py.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "frame_w", "frame_h", "scale", "fps", "animations", "moods", "triggers", "roam"],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "frame_w": { "$ref": "#/$defs/frameSize" },
     "frame_h": { "$ref": "#/$defs/frameSize" },
     "scale": { "type": "integer", "minimum": 1, "maximum": 4 },
     "fps": { "type": "integer", "minimum": 1, "maximum": 24 },
-    "sheet": { "$ref": "#/$defs/png" },
+    "sheet": { "$ref": "#/$defs/sheetPath" },
     "stages": {
       "type": "array",
       "minItems": 1,
@@ -25,7 +25,7 @@
           "id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$", "minLength": 2, "maxLength": 20 },
           "name": { "type": "string", "minLength": 1, "maxLength": 24 },
           "min_growth": { "type": "number", "minimum": 0, "maximum": 1 },
-          "sheet": { "$ref": "#/$defs/png" },
+          "sheet": { "$ref": "#/$defs/sheetPath" },
           "frame_w": { "$ref": "#/$defs/frameSize" },
           "frame_h": { "$ref": "#/$defs/frameSize" }
         }
@@ -86,6 +86,13 @@
     { "required": ["sheet"], "not": { "required": ["stages"] } },
     { "required": ["stages"], "not": { "required": ["sheet"] } }
   ],
+  "if": { "properties": { "schema_version": { "const": 1 } } },
+  "then": {
+    "properties": {
+      "sheet": { "$ref": "#/$defs/png" },
+      "stages": { "items": { "properties": { "sheet": { "$ref": "#/$defs/png" } } } }
+    }
+  },
   "$defs": {
     "frameSize": { "type": "integer", "minimum": 8, "maximum": 64 },
     "animName": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,23}$" },
@@ -93,6 +100,44 @@
       "type": "string",
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\\.png$"
+    },
+    "sheetPath": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*\\.(png|json)$",
+      "not": { "const": "sprite.json" }
+    },
+    "pixelSheet": {
+      "$anchor": "pixelSheet",
+      "description": "A schema_version 2 pixel sheet file. Each frame is frame_h strings of exactly frame_w characters; '.' is transparent and 0-9, a-f index the palette (index < palette length). frame_w x frame_h must equal the stage's, and the frame count must cover the highest frame index any animation uses; tools/validate.py checks those.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["palette", "frame_w", "frame_h", "frames"],
+      "properties": {
+        "palette": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}$",
+            "not": { "pattern": "^#[fF]{6}$" }
+          }
+        },
+        "frame_w": { "type": "integer", "minimum": 8, "maximum": 32 },
+        "frame_h": { "type": "integer", "minimum": 8, "maximum": 32 },
+        "frames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "type": "array",
+            "minItems": 8,
+            "maxItems": 32,
+            "items": { "type": "string", "pattern": "^[.0-9a-f]{8,32}$" }
+          }
+        }
+      }
     }
   }
 }

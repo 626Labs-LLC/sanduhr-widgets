@@ -17,5 +17,7 @@ jobs:
           python-version: "3.12"
       - name: Tool tests
         run: python tools/test_validate.py
+      - name: Signing tests (throwaway keys)
+        run: python tools/test_sign_catalog.py
       - name: Validate every pack (strict)
         run: python tools/validate.py --strict

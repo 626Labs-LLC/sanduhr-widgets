@@ -1,8 +1,9 @@
 name: release
 
 # Push a tag like v1.0.0 to publish. The workflow validates every pack, builds the zips and
-# catalog.json, signs the catalog with the SIGNING_KEY secret (a PEM Ed25519 private key), and
-# uploads zips + catalog.json + catalog.json.sig to the GitHub release for the tag.
+# catalog.json, signs the catalog with the SIGNING_KEY secret (a PEM ECDSA P-256 private key;
+# the signature is SHA-256, published as the 64-byte P1363 r||s in base64), and uploads
+# zips + catalog.json + catalog.json.sig to the GitHub release for the tag.
 
 on:
   push:
@@ -24,6 +25,9 @@ jobs:
       - name: Tool tests
         run: python tools/test_validate.py
 
+      - name: Signing tests (throwaway keys)
+        run: python tools/test_sign_catalog.py
+
       - name: Validate every pack (strict)
         run: python tools/validate.py --strict
 
@@ -35,7 +39,7 @@ jobs:
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
         run: |
           if [ -z "${SIGNING_KEY}" ]; then
-            echo "::error title=SIGNING_KEY is not set::Add the Ed25519 private key (PEM) as the repository secret SIGNING_KEY. Generate it offline: see README, 'Generating the signing key'. Nothing was published."
+            echo "::error title=SIGNING_KEY is not set::Add the ECDSA P-256 private key (PEM) as the repository secret SIGNING_KEY. Generate it offline: see README, 'Generating the signing key'. Nothing was published."
             exit 1
           fi
 
