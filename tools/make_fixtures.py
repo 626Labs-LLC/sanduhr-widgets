@@ -256,6 +256,36 @@ def bad(root):
                sprite=dict(SPRITE_V2, frame_w=40, frame_h=40))
     pixel_pack("bad-sprite-v1-json-sheet", PIXEL, sprite=dict(SPRITE_V2, schema_version=1))
 
+    # a JSON file that is just `null` (once read as "file absent", so it passed)
+    d = palette("bad-null-pack")
+    jw(d / "pack.json", None)
+    d = palette("bad-null-palettes")
+    jw(d / "palettes.json", None)
+    d = make(root, "bad-null-effects", "effects", ["effects.json"])
+    jw(d / "effects.json", None)
+    d = make(root, "bad-null-theme", "theme", ["themes/fixture-dark.json"])
+    jw(d / "themes" / "fixture-dark.json", None)
+    d = make(root, "bad-null-sprite", "sprite", ["sprite.json", "sprite.png"])
+    jw(d / "sprite.json", None)
+    bw(d / "sprite.png", sheet(32, 8))
+    pixel_pack("bad-null-pixel-sheet", None)
+
+    # a value ending in a newline (`$` used to accept it)
+    d = make(root, "bad-newline-color", "palette", ["palettes.json"])
+    jw(d / "palettes.json", {"schema_version": 1, "palettes": [
+        {"name": "plain", "colors": ["#ff2a6d\n", "#05d9e8"], "mood": "test"}]})
+    d = make(root, "bad-newline-name", "palette", ["palettes.json"])
+    jw(d / "palettes.json", {"schema_version": 1, "palettes": [
+        {"name": "plain\n", "colors": ["#ff2a6d", "#05d9e8"], "mood": "test"}]})
+    d = make(root, "bad-newline-theme-color", "theme", ["themes/fixture-dark.json"])
+    jw(d / "themes" / "fixture-dark.json", dict(THEME, accent="#ff2a6d\n"))
+
+    # the wrong JSON type for a field (these used to raise TypeError)
+    palette("bad-type-license", license=[])
+    d = make(root, "bad-type-sprite-files", "sprite", [{"sheet": "sprite.png"}, "sprite.json", "sprite.png"])
+    jw(d / "sprite.json", SPRITE)
+    bw(d / "sprite.png", sheet(32, 8))
+
 
 def main():
     if OUT.exists():
