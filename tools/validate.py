@@ -54,13 +54,15 @@ MAX_PACK_BYTES = 10 * 1024 * 1024
 MAX_FILES = 64
 MAX_LICENSE_BYTES = 100 * 1024
 
-ID_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
-SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-PATH_SEG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-PRESET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,23}$")
-ANIM_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
-THEME_FILE_RE = re.compile(r"^themes/[a-z0-9]+(-[a-z0-9]+)*\.json$")
+# These patterns carry no ^ or $ anchors and are applied with fullmatch: `$` also matches before a
+# trailing newline, so `re.match("^x$", "x\n")` succeeds.
+ID_RE = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
+SEMVER_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+HEX_RE = re.compile(r"#[0-9a-fA-F]{6}")
+PATH_SEG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+PRESET_NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,23}")
+ANIM_NAME_RE = re.compile(r"[a-z][a-z0-9_]{1,23}")
+THEME_FILE_RE = re.compile(r"themes/[a-z0-9]+(-[a-z0-9]+)*\.json")
 CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 MANIFEST_REQUIRED = ("schema_version", "id", "name", "version", "author", "license", "kind",
@@ -142,10 +144,15 @@ def load_json(path, rep, rel):
         rep.err("%s: not valid UTF-8" % rel)
         return None
     try:
-        return json.loads(text, object_pairs_hook=_no_dupes)
+        value = json.loads(text, object_pairs_hook=_no_dupes)
     except (ValueError, RecursionError) as e:
         rep.err("%s: invalid JSON (%s)" % (rel, e))
         return None
+    if value is None:
+        # None means "no usable file" to every caller, so a literal null must be an error here
+        rep.err("%s: must be a JSON object, got null" % rel)
+        return None
+    return value
 
 
 def iter_strings(obj):
@@ -185,7 +192,7 @@ def safe_rel_path(p):
         return False
     if p.startswith("/") or "\\" in p or ":" in p:
         return False
-    return all(PATH_SEG_RE.match(seg) for seg in p.split("/"))
+    return all(PATH_SEG_RE.fullmatch(seg) for seg in p.split("/"))
 
 
 # ---- PNG -------------------------------------------------------------------------------
@@ -353,7 +360,7 @@ def lint_theme(data):
         v = data.get(f)
         if f not in data:
             errs.append("%s is required (a #rrggbb color)" % f)
-        elif not isinstance(v, str) or not HEX_RE.match(v):
+        elif not isinstance(v, str) or not HEX_RE.fullmatch(v):
             errs.append("%s must be a #rrggbb color (six hex digits), got %r" % (f, v))
         else:
             colors[f] = _rgb(v)
@@ -378,7 +385,7 @@ def lint_theme(data):
         v = obj[key]
         if v is None:
             return
-        if not isinstance(v, str) or not HEX_RE.match(v):
+        if not isinstance(v, str) or not HEX_RE.fullmatch(v):
             errs.append("%s must be a #rrggbb color or null, got %r" % (label, v))
 
     glass_alpha = check_range(data, "glass_alpha", 0, 1)
@@ -489,7 +496,7 @@ def check_palettes(rep, data):
         if extra:
             rep.err("%s has unknown keys %s" % (where, sorted(extra)))
         n = p.get("name")
-        if not isinstance(n, str) or not PRESET_NAME_RE.match(n):
+        if not isinstance(n, str) or not PRESET_NAME_RE.fullmatch(n):
             rep.err("%s: name must be 2 to 24 lowercase letters, digits or hyphens" % where)
         elif n in seen:
             rep.err("%s: duplicate palette name %r" % (where, n))
@@ -500,7 +507,7 @@ def check_palettes(rep, data):
             rep.err("%s: colors must be 1 to 4 #rrggbb stops" % where)
         else:
             for c in cols:
-                if not isinstance(c, str) or not HEX_RE.match(c):
+                if not isinstance(c, str) or not HEX_RE.fullmatch(c):
                     rep.err("%s: %r is not a #rrggbb color" % (where, c))
         if "mood" in p and (not isinstance(p["mood"], str) or len(p["mood"]) > 24):
             rep.err("%s: mood must be a string of at most 24 characters" % where)
@@ -530,7 +537,7 @@ def check_effects(rep, data):
         if extra:
             rep.err("%s has unknown keys %s" % (where, sorted(extra)))
         n = e.get("name")
-        if not isinstance(n, str) or not PRESET_NAME_RE.match(n):
+        if not isinstance(n, str) or not PRESET_NAME_RE.fullmatch(n):
             rep.err("%s: name must be 2 to 24 lowercase letters, digits or hyphens" % where)
         elif n in seen:
             rep.err("%s: duplicate preset name %r" % (where, n))
@@ -545,7 +552,7 @@ def check_effects(rep, data):
         if not is_int(pm) or not 400 <= pm <= 10000:
             rep.err("%s: period_ms must be an integer from 400 to 10000" % where)
         c = e.get("color")
-        if not (c == "ink" or (isinstance(c, str) and HEX_RE.match(c))):
+        if not (c == "ink" or (isinstance(c, str) and HEX_RE.fullmatch(c))):
             rep.err('%s: color must be a #rrggbb color or "ink"' % where)
 
 
@@ -575,7 +582,7 @@ def check_pixel_sheet(rep, rel, data, w, h, max_index, label):
         else:
             ncolors = len(pal)
             for i, c in enumerate(pal):
-                if not isinstance(c, str) or not HEX_RE.match(c):
+                if not isinstance(c, str) or not HEX_RE.fullmatch(c):
                     err("palette[%d] %r is not a #rrggbb color" % (i, c))
                 elif c.lower() == "#ffffff":
                     err("palette[%d] is pure white (%s), which sprites may not use (it burns on "
@@ -681,7 +688,7 @@ def check_sprite(rep, pack_dir, data, files_field, jload=None):
         if len(anims) > 32:
             rep.err("%s: more than 32 animations" % rel)
         for name, frames in anims.items():
-            if not ANIM_NAME_RE.match(name):
+            if not ANIM_NAME_RE.fullmatch(name):
                 rep.err("%s: animation name %r must match [a-z][a-z0-9_]{1,23}" % (rel, name))
             anim_names.add(name)
             if (not isinstance(frames, list) or not 1 <= len(frames) <= 64
@@ -752,7 +759,7 @@ def check_sprite(rep, pack_dir, data, files_field, jload=None):
             if extra:
                 rep.err("%s has unknown keys %s" % (where, sorted(extra)))
             sid = st.get("id")
-            if not isinstance(sid, str) or not ID_RE.match(sid) or not 2 <= len(sid) <= 20:
+            if not isinstance(sid, str) or not ID_RE.fullmatch(sid) or not 2 <= len(sid) <= 20:
                 rep.err("%s: id must be kebab-case, 2 to 20 characters" % where)
             elif sid in ids:
                 rep.err("%s: duplicate stage id %r" % (where, sid))
@@ -789,7 +796,7 @@ def check_sprite(rep, pack_dir, data, files_field, jload=None):
                     sheets.append((sp, sw, sh, "stage %r" % sid))
 
     expected_files = {"sprite.json"} | {s[0] for s in sheets}
-    listed = set(files_field) if isinstance(files_field, list) else set()
+    listed = {f for f in files_field if isinstance(f, str)} if isinstance(files_field, list) else set()
     if sheets:
         if listed != expected_files:
             missing = sorted(expected_files - listed)
@@ -916,17 +923,17 @@ def validate_pack(pack_dir, label=None):
         rep.err("pack.json: schema_version must be 1")
     pid = text_field("id", 3, 40)
     if pid is not None:
-        if not ID_RE.match(pid):
+        if not ID_RE.fullmatch(pid):
             rep.err("pack.json: id %r must be lowercase kebab-case ([a-z][a-z0-9]*(-[a-z0-9]+)*)" % pid)
         elif pid != pack_dir.name:
             rep.err("pack.json: id %r does not match the folder name %r" % (pid, pack_dir.name))
     name = text_field("name", 1, 40)
     version = text_field("version", 1, 32)
-    if version is not None and not SEMVER_RE.match(version):
+    if version is not None and not SEMVER_RE.fullmatch(version):
         rep.err("pack.json: version %r must be MAJOR.MINOR.PATCH" % version)
     author = text_field("author", 1, 80)
     smin = text_field("sanduhr_min", 1, 32)
-    if smin is not None and not SEMVER_RE.match(smin):
+    if smin is not None and not SEMVER_RE.fullmatch(smin):
         rep.err("pack.json: sanduhr_min %r must be MAJOR.MINOR.PATCH" % smin)
     desc = text_field("description", 1, 200)
 
@@ -936,7 +943,7 @@ def validate_pack(pack_dir, label=None):
         kind = None
 
     lic = manifest.get("license")
-    if "license" in manifest and lic not in LICENSES:
+    if "license" in manifest and (not isinstance(lic, str) or lic not in LICENSES):
         rep.err("pack.json: license %r is not allowed; use one of %s" % (lic, ", ".join(LICENSES)))
         lic = None
     if kind == "font" and lic is not None and lic not in FONT_LICENSES:
@@ -1068,7 +1075,7 @@ def validate_pack(pack_dir, label=None):
         if not 1 <= len(listed) <= 8:
             rep.err("pack.json: theme packs list 1 to 8 theme files (got %d)" % len(listed))
         for rel in listed:
-            if not THEME_FILE_RE.match(rel):
+            if not THEME_FILE_RE.fullmatch(rel):
                 rep.err("%s: theme files must be themes/<kebab-name>.json" % rel)
                 continue
             data = jload(rel)
@@ -1129,7 +1136,7 @@ def validate_paths(paths):
         pj = Path(p) / "pack.json"
         try:
             pid = json.loads(pj.read_text(encoding="utf-8")).get("id")
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, RecursionError, AttributeError):
             continue
         if isinstance(pid, str):
             if pid in seen:

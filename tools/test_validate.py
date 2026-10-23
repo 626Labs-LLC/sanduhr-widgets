@@ -56,6 +56,24 @@ BAD = {
     "bad-sprite-v1-json-sheet": "'sheet.json' is a .json pixel sheet, which needs sprite.json schema_version 2",
 }
 
+# issue #2 fixtures: each fails with exactly this one error line (after the pack label)
+EXACT = {
+    "bad-null-pack": "pack.json: must be a JSON object, got null",
+    "bad-null-palettes": "palettes.json: must be a JSON object, got null",
+    "bad-null-effects": "effects.json: must be a JSON object, got null",
+    "bad-null-theme": "themes/fixture-dark.json: must be a JSON object, got null",
+    "bad-null-sprite": "sprite.json: must be a JSON object, got null",
+    "bad-null-pixel-sheet": "sheet.json: must be a JSON object, got null",
+    "bad-newline-color": "palettes.json: palettes[0]: '#ff2a6d\\n' is not a #rrggbb color",
+    "bad-newline-name": "palettes.json: palettes[0]: name must be 2 to 24 lowercase letters, digits or hyphens",
+    "bad-newline-theme-color": "themes/fixture-dark.json: accent must be a #rrggbb color (six hex digits), "
+                               "got '#ff2a6d\\n'",
+    "bad-type-license": "pack.json: license [] is not allowed; use one of MIT, CC-BY-4.0, CC0-1.0, "
+                        "Apache-2.0, OFL-1.1, BSD-3-Clause, ISC",
+    "bad-type-sprite-files": "pack.json: files entries must be strings",
+}
+BAD.update(EXACT)
+
 BUILT_INS = {
     "obsidian": {"name": "Obsidian", "bg": "#0d0d0d", "glass": "#1c1c1c", "glass_on_mica": "#1a1a1c",
                  "title_bg": "#161616", "border": "#333333", "text": "#e8e4dc", "text_secondary": "#b8b4ac",
@@ -136,6 +154,13 @@ class BadFixtures(unittest.TestCase):
                 self.assertTrue(rep.errors, "expected errors for %s" % name)
                 self.assertTrue(any(needle in e for e in rep.errors),
                                 "no error containing %r in %r" % (needle, rep.errors))
+
+    def test_issue_2_fixtures_fail_with_exactly_one_error(self):
+        for name, msg in EXACT.items():
+            with self.subTest(pack=name):
+                rep = validate.validate_pack(FIXTURES / "bad" / name)
+                self.assertEqual(rep.errors, [msg])
+                self.assertEqual(rep.warnings, [])
 
     def test_light_theme_is_a_warning_and_fails_only_under_strict(self):
         pack = FIXTURES / "bad" / "bad-theme-light-bg"
@@ -454,6 +479,107 @@ class ThemeLintCalibration(unittest.TestCase):
         t = dict(BUILT_INS["obsidian"], text_dim="#eeeeee")
         _, warns = validate.lint_theme(t)
         self.assertTrue(any("text_dim is not darker" in w for w in warns))
+
+
+class Hardening(TempCase):
+    """Issue #2: null files, trailing newlines and wrong JSON types."""
+
+    def test_patterns_reject_a_trailing_newline(self):
+        ok = {"ID_RE": "good-id", "SEMVER_RE": "1.0.0", "HEX_RE": "#ff2a6d", "PATH_SEG_RE": "a.json",
+              "PRESET_NAME_RE": "plain", "ANIM_NAME_RE": "walk"}
+        for name, value in ok.items():
+            pat = getattr(validate, name)
+            with self.subTest(pattern=name):
+                self.assertTrue(pat.fullmatch(value))
+                self.assertIsNone(pat.fullmatch(value + "\n"))
+        self.assertIsNone(validate.THEME_FILE_RE.fullmatch("themes/a.json\n"))
+        self.assertFalse(validate.safe_rel_path("sprite.png\n"))
+        self.assertFalse(validate.safe_rel_path("sprites\n/one.png"))
+
+    def test_no_pattern_is_applied_with_match(self):
+        src = (HERE / "validate.py").read_text(encoding="utf-8")
+        self.assertNotIn("_RE.match(", src)
+
+    def test_trailing_newline_in_other_values(self):
+        pal = self.copy_good("good-palette")
+        self.edit_json(pal / "palettes.json", lambda d: d["palettes"][0]["colors"].append("#abcdef\n"))
+        self.assertTrue(any("not a #rrggbb color" in e for e in validate.validate_pack(pal).errors))
+        eff = self.copy_good("good-effects")
+        self.edit_json(eff / "effects.json", lambda d: d["effects"][0].update(color="#abcdef\n"))
+        self.assertTrue(any("color must be" in e for e in validate.validate_pack(eff).errors))
+        spr = self.copy_good("good-sprite-stages")
+        self.edit_json(spr / "sprite.json", lambda d: d["stages"][0].update(id="one\n"))
+        self.assertTrue(any("id must be kebab-case" in e for e in validate.validate_pack(spr).errors))
+
+    def test_null_in_every_json_file_of_every_good_pack_is_an_error(self):
+        for pack in sorted(p for p in (FIXTURES / "good").iterdir() if p.is_dir()):
+            for f in sorted(pack.rglob("*.json")):
+                rel = f.relative_to(pack).as_posix()
+                with self.subTest(pack=pack.name, file=rel):
+                    work = self.tmp / ("n-" + pack.name)
+                    shutil.rmtree(work, True)
+                    shutil.copytree(pack, work)
+                    (work / rel).write_text("null\n", encoding="utf-8", newline="\n")
+                    rep = validate.validate_pack(work)
+                    self.assertTrue(any("must be a JSON object, got null" in e for e in rep.errors),
+                                    rep.errors)
+
+    def test_top_level_wrong_types_are_errors(self):
+        for pack in sorted(p for p in (FIXTURES / "good").iterdir() if p.is_dir()):
+            for f in sorted(pack.rglob("*.json")):
+                rel = f.relative_to(pack).as_posix()
+                for text in ("[]", "0", "true", '"s"', "[null]"):
+                    with self.subTest(pack=pack.name, file=rel, text=text):
+                        work = self.tmp / ("t-" + pack.name)
+                        shutil.rmtree(work, True)
+                        shutil.copytree(pack, work)
+                        (work / rel).write_text(text, encoding="utf-8", newline="\n")
+                        self.assertTrue(validate.validate_pack(work).errors)
+
+    def test_no_wrong_type_raises(self):
+        """Replace every node of every JSON file in every good pack with each wrong type; never raise."""
+        junk = [None, [], {}, 0, 1.5, True, "", "x\n", [[]], [{}], {"a": 1}, [None]]
+
+        def paths(node, prefix=()):
+            yield prefix
+            if isinstance(node, dict):
+                for k, v in node.items():
+                    yield from paths(v, prefix + (k,))
+            elif isinstance(node, list):
+                for i, v in enumerate(node):
+                    yield from paths(v, prefix + (i,))
+
+        def get(root, path):
+            for k in path:
+                root = root[k]
+            return root
+
+        def put(root, path, value):
+            get(root, path[:-1])[path[-1]] = value
+
+        runs = 0
+        for pack in sorted(p for p in (FIXTURES / "good").iterdir() if p.is_dir()):
+            work = self.tmp / ("f-" + pack.name)
+            shutil.copytree(pack, work)
+            for f in sorted(work.rglob("*.json")):
+                original = json.loads(f.read_text(encoding="utf-8"))
+                for path in paths(original):
+                    if not path:
+                        continue
+                    values = list(junk)
+                    if isinstance(get(original, path), str):
+                        values.append(get(original, path) + "\n")  # a trailing newline
+                    for value in values:
+                        data = json.loads(json.dumps(original))
+                        put(data, path, value)
+                        f.write_text(json.dumps(data), encoding="utf-8", newline="\n")
+                        try:
+                            validate.validate_pack(work)
+                        except Exception as e:  # noqa: BLE001
+                            self.fail("%s %s %s <- %r raised %r" % (pack.name, f.name, path, value, e))
+                        runs += 1
+                f.write_text(json.dumps(original), encoding="utf-8", newline="\n")
+        self.assertGreater(runs, 1000)
 
 
 class RealPacks(unittest.TestCase):
