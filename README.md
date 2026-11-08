@@ -46,6 +46,7 @@ Python 3 only, no pip.
 python tools/validate.py                  # every pack, same checks CI runs
 python tools/validate.py packs/hourglass  # one pack
 python tools/validate.py --strict         # theme design-rule warnings fail too
+python tools/validate.py my-pack-1.0.0.zip  # a pack zip you made: Sanduhr's zip rules, then the pack's
 python tools/test_validate.py             # the tools' own tests
 python tools/test_sign_catalog.py         # signing tests (needs openssl and bash)
 ```
