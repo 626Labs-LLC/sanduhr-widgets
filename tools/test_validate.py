@@ -685,6 +685,102 @@ class Catalog(TempCase):
         self.assertFalse((self.tmp / "dist" / "catalog.json").exists())
 
 
+class ReleaseZips(TempCase):
+    """validate.py on a .zip: Sanduhr's reader rules (WidgetZip), with its sentences, then the pack."""
+
+    def zip_of(self, fixture, name=None, mutate=None, **opts):
+        import zipfile
+        src = self.tmp / ("src-" + (name or fixture)) / fixture   # each zip gets its own copy
+        shutil.copytree(FIXTURES / "good" / fixture, src)
+        if mutate:
+            mutate(src)
+        dest = self.tmp / (name or fixture + ".zip")
+        if opts.get("stream"):
+            # A non-seekable target makes zipfile write data descriptors (flag 0x08), as streaming tools do.
+            class Unseekable(io.RawIOBase):
+                def __init__(self):
+                    self.buf = bytearray()
+                def writable(self):
+                    return True
+                def write(self, b):
+                    self.buf += b
+                    return len(b)
+            raw = Unseekable()
+            with zipfile.ZipFile(raw, "w", compression=zipfile.ZIP_STORED) as zf:
+                for f in sorted(x for x in src.rglob("*") if x.is_file()):
+                    zf.write(f, f.relative_to(src).as_posix())
+            dest.write_bytes(bytes(raw.buf))
+            return dest
+        method = zipfile.ZIP_DEFLATED if opts.get("deflate") else zipfile.ZIP_STORED
+        with zipfile.ZipFile(dest, "w", compression=method) as zf:
+            if opts.get("folders"):
+                zf.writestr(zipfile.ZipInfo("art/"), b"")
+            for f in sorted(x for x in src.rglob("*") if x.is_file()):
+                info = zipfile.ZipInfo(f.relative_to(src).as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
+                info.compress_type = method
+                info.create_system = 3
+                info.external_attr = (opts.get("mode", 0o100644)) << 16
+                zf.writestr(info, f.read_bytes())
+        return dest
+
+    def errors(self, path):
+        return validate.validate_zip(path).errors
+
+    def test_a_catalog_built_zip_passes(self):
+        out = self.tmp / "dist"
+        out.mkdir()
+        build_catalog.zip_pack(FIXTURES / "good" / "good-sprite", out / "good-sprite-1.0.0.zip")
+        self.assertEqual(self.errors(out / "good-sprite-1.0.0.zip"), [])
+
+    def test_a_stored_zip_of_a_good_pack_passes_under_its_own_name(self):
+        rep = validate.validate_zip(self.zip_of("good-palette", "anything.zip"))
+        self.assertEqual((rep.label, rep.errors, rep.warnings), ("anything.zip", [], []))
+
+    def test_compressed_entries_are_refused_in_the_readers_words(self):
+        errs = self.errors(self.zip_of("good-palette", deflate=True))
+        self.assertEqual(len(errs), 1)
+        self.assertRegex(errs[0], r"^zip: .+: compressed entries are not allowed \(pack zips are stored\)$")
+
+    def test_data_descriptors_are_refused(self):
+        errs = self.errors(self.zip_of("good-palette", stream=True))
+        self.assertEqual(len(errs), 1)
+        self.assertIn("encrypted entries and data descriptors are not allowed", errs[0])
+
+    def test_directory_entries_are_refused(self):
+        errs = self.errors(self.zip_of("good-palette", folders=True))
+        self.assertEqual(errs, ["zip: art/: directory entries are not allowed in a pack zip"])
+
+    def test_links_are_refused(self):
+        errs = self.errors(self.zip_of("good-palette", mode=0o120777))
+        self.assertIn("only regular files are allowed (no links or folders)", errs[0])
+
+    def test_a_crc_mismatch_is_refused(self):
+        z = self.zip_of("good-palette")
+        data = bytearray(z.read_bytes())
+        i = data.find(b"{")   # first byte of a JSON body
+        data[i] ^= 0x01
+        z.write_bytes(bytes(data))
+        self.assertIn("CRC-32 mismatch", self.errors(z)[0])
+
+    def test_not_a_zip(self):
+        z = self.tmp / "nope.zip"
+        z.write_bytes(b"not a zip at all, just text")
+        self.assertEqual(self.errors(z), ["zip: the zip has no end-of-directory record"])
+
+    def test_a_pack_problem_inside_a_good_zip_is_reported_as_the_pack(self):
+        z = self.zip_of("good-palette", mutate=lambda d: (d / "LICENSE").unlink())
+        errs = self.errors(z)
+        self.assertTrue(errs and all(not e.startswith("zip:") for e in errs), errs)
+        self.assertTrue(any("LICENSE" in e for e in errs), errs)
+
+    def test_the_cli_takes_a_zip_and_a_folder_together(self):
+        code, out = run_main([str(self.zip_of("good-palette")), str(FIXTURES / "good" / "good-theme")])
+        self.assertEqual(code, 0, out)
+        code, out = run_main([str(self.zip_of("good-palette", "deflated.zip", deflate=True))])
+        self.assertEqual(code, 1)
+        self.assertIn("ERROR deflated.zip: zip:", out)
+
+
 class Cli(unittest.TestCase):
     def test_exit_codes_and_one_line_per_finding(self):
         code, out = run_main([str(FIXTURES / "good" / "good-theme")])
